@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cloud PC Low Latency Audio</title>
+<style>
+body {
+  font-family: system-ui, sans-serif;
+  max-width: 550px;
+  margin: 60px auto;
+  padding: 20px;
+}
+button {
+  padding: 12px 20px;
+  margin-right: 8px;
+  cursor: pointer;
+}
+#status { margin-top: 25px; }
+</style>
+</head>
+<body>
+
+<h2>Cloud PC Audio</h2>
+<p>WebSocket + Web Audio · Low latency</p>
+
+<button id="start">Bật âm thanh</button>
+<button id="stop" disabled>Dừng</button>
+
+<p id="status">Chưa kết nối</p>
+
+<script>
+let ctx = null;
+let node = null;
+let socket = null;
+
+const startBtn = document.getElementById("start");
+const stopBtn = document.getElementById("stop");
+const statusEl = document.getElementById("status");
+
+async function stopAudio() {
+  if (socket) {
+    socket.onclose = null;
+    socket.close();
+    socket = null;
+  }
+
+  if (node) {
+    node.disconnect();
+    node = null;
+  }
+
+  if (ctx) {
+    await ctx.close();
+    ctx = null;
+  }
+
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+  statusEl.textContent = "Đã ngắt kết nối";
+}
+
+startBtn.onclick = async () => {
+  startBtn.disabled = true;
+
+  try {
+    ctx = new AudioContext({
+      latencyHint: "interactive"
+    });
+
+    await ctx.resume();
+    await ctx.audioWorklet.addModule(
+      "/audio-worklet.js"
+    );
+
+    node = new AudioWorkletNode(
+      ctx,
+      "cloudpc-pcm",
+      {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [1]
+      }
+    );
+
+    node.connect(ctx.destination);
+
+    const protocol =
+      location.protocol === "https:" ? "wss:" : "ws:";
+
+    socket = new WebSocket(
+      `${protocol}//${location.host}/ws?rate=${ctx.sampleRate}`
+    );
+
+    socket.binaryType = "arraybuffer";
+
+    socket.onopen = () => {
+      statusEl.textContent = "Đang phát âm thanh trực tiếp";
+      stopBtn.disabled = false;
+    };
+
+    socket.onmessage = (event) => {
+      if (event.data instanceof ArrayBuffer && node) {
+        node.port.postMessage(
+          event.data,
+          [event.data]
+        );
+      }
+    };
+
+    socket.onerror = () => {
+      statusEl.textContent = "Lỗi kết nối WebSocket";
+    };
+
+    socket.onclose = () => {
+      if (node) {
+        node.port.postMessage({type: "reset"});
+      }
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      statusEl.textContent = "Mất kết nối - hãy bật lại";
+    };
+
+  } catch (e) {
+    statusEl.textContent = "Lỗi: " + e.message;
+    await stopAudio();
+  }
+};
+
+stopBtn.onclick = stopAudio;
+</script>
+</body>
+</html>
